@@ -1,0 +1,95 @@
+{
+  "name": "claude-orator-mcp",
+  "version": "0.2.0-beta.0",
+  "description": "An MCP server for prompt optimization in Claude Code",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "claude-orator-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist/",
+    ".claude/skills/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run lint && vitest run",
+    "prepublishOnly": "npm run build && npm run lint && npm run format:check",
+    "prepare": "husky || true"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "anthropic",
+    "llm",
+    "ai",
+    "ai-tools",
+    "ai-agent",
+    "prompt-engineering",
+    "prompt-optimization",
+    "prompt-tuning",
+    "prompt-design",
+    "best-practices",
+    "npx",
+    "zero-install",
+    "cli",
+    "developer-tools",
+    "typescript",
+    "nodejs"
+  ],
+  "author": "Vvkmnn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Vvkmnn/claude-orator-mcp.git"
+  },
+  "homepage": "https://github.com/Vvkmnn/claude-orator-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Vvkmnn/claude-orator-mcp/issues"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/Vvkmnn"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.5.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.8.1",
+    "typescript": "^5.3.0",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^4.0.18"
+  },
+  "lint-staged": {
+    "src/**/*.ts": [
+      "prettier --write",
+      "eslint --fix"
+    ]
+  }
+}
