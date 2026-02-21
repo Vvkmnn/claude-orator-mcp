@@ -1,6 +1,6 @@
 {
   "name": "claude-orator-mcp",
-  "version": "0.2.0-beta.0",
+  "version": "0.1.0",
   "description": "An MCP server for prompt optimization in Claude Code",
   "type": "module",
   "main": "./dist/index.js",
