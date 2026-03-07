@@ -16,6 +16,8 @@ export interface Technique {
   when_to_use: (ctx: TechniqueContext) => boolean;
   template: string;
   doc_url: string;
+  /** Prevalence data from 34-tool industry analysis */
+  industry_note?: string;
 }
 
 export interface TechniqueContext {
@@ -51,6 +53,8 @@ export const TECHNIQUES: Technique[] = [
 </task>`,
     doc_url:
       'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/chain-of-thought',
+    industry_note:
+      '35% of production tools include explicit thinking structures. Devin mandates <think> in 10 situations. Bolt requires 2-4 line outlines before coding.',
   },
 
   {
@@ -72,6 +76,8 @@ export const TECHNIQUES: Technique[] = [
 {CONTEXT}
 </context>`,
     doc_url: 'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/use-xml-tags',
+    industry_note:
+      '~70% of 34 production tools use XML sections. Common names: system_constraints, tool_calling, making_code_changes, communication, debugging, planning.',
   },
 
   {
@@ -92,6 +98,8 @@ export const TECHNIQUES: Technique[] = [
 </examples>`,
     doc_url:
       'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/multishot-prompting',
+    industry_note:
+      '~50% use labeled good/bad example pairs. Cursor has 12+ contrastive pairs for code citation. Gemini uses anti-examples to prevent hallucination.',
   },
 
   {
@@ -110,6 +118,8 @@ export const TECHNIQUES: Technique[] = [
 {PROMPT}`,
     doc_url:
       'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/system-prompts',
+    industry_note:
+      "100% of 34 tools use direct 'You are X'. ~60% use compound roles (name + expertise + domains). Average role: 20-30 words. Zero use 'pretend' or 'act as'.",
   },
 
   {
@@ -118,13 +128,15 @@ export const TECHNIQUES: Technique[] = [
     description:
       'Explicitly specify the desired output format to get consistent, machine-parseable responses.',
     action_phrase: 'specified output format',
-    when_to_use: ({ intent, scores }) => scores.output_format < 4 && intent !== 'conversation',
+    when_to_use: ({ scores }) => scores.output_format < 4,
     template: `{PROMPT}
 
 Respond in the following format:
 {FORMAT_SPECIFICATION}`,
     doc_url:
       'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/be-clear-and-direct',
+    industry_note:
+      'Every production prompt specifies output expectations. Replit uses 7 XML output schemas. Cluely enforces headline-first pyramid format.',
   },
 
   {
@@ -159,6 +171,8 @@ Sequential steps:
 3. Using output from step 2, {THIRD_SUBTASK}`,
     doc_url:
       'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/chain-prompts',
+    industry_note:
+      "Amp delegates hard sub-problems to a separate 'oracle' model. Kiro uses a three-prompt classifier architecture for routing.",
   },
 
   {
@@ -205,6 +219,8 @@ If unsure about any claim, say so explicitly rather than guessing.`,
 Remember: {KEY_INSTRUCTION}`,
     doc_url:
       'https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/long-context-tips',
+    industry_note:
+      '~30% use sandwich pattern (key instruction at top + bottom). Claude Code, Lovable, Bolt, Augment all repeat critical rules.',
   },
 
   {
@@ -223,6 +239,8 @@ When using tools:
 - Handle tool errors gracefully
 - Prefer specific tools over general ones`,
     doc_url: 'https://docs.anthropic.com/en/docs/build-with-claude/tool-use/overview',
+    industry_note:
+      "Cursor requires an 'explanation' parameter on most tools. 40% of tools require justifying each tool call.",
   },
 ];
 

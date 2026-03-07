@@ -9,11 +9,13 @@
 
 import { detectComplexity, detectIntent } from './analysis/detector.js';
 import {
-  detectIssues,
-  generateSuggestions,
+  detectAttributedIssues,
+  generateAttributedSuggestions,
+  generateSemanticHints,
   overallScore,
   scorePrompt,
 } from './analysis/heuristics.js';
+import { XML_SECTION_HINTS } from './analysis/industry.js';
 import type { Complexity, Intent, OptimizeInput, OptimizeResult, Scores, Target } from './types.js';
 import { selectTechniques, type Technique } from './techniques/index.js';
 
@@ -31,9 +33,12 @@ export function optimize(input: OptimizeInput): OptimizeResult {
   const beforeScores = scorePrompt(prompt);
   const scoreBefore = overallScore(beforeScores);
 
-  // 3. Collect issues and suggestions
-  const issues = detectIssues(prompt, beforeScores);
-  const suggestions = generateSuggestions(prompt, beforeScores);
+  // 3. Collect issues and suggestions with attribution metadata
+  const attributedIssues = detectAttributedIssues(prompt, beforeScores, intent);
+  const attributedSuggestions = generateAttributedSuggestions(prompt, beforeScores, intent);
+  const semanticHints = generateSemanticHints(prompt, beforeScores, intent, complexity);
+  const issues = attributedIssues.map((i) => i.message);
+  const suggestions = attributedSuggestions.map((s) => s.message);
 
   // 4. Select techniques
   const techniques = selectTechniques(
@@ -56,6 +61,13 @@ export function optimize(input: OptimizeInput): OptimizeResult {
       applied_techniques: [],
       issues,
       suggestions,
+      analysis: {
+        attributed_issues: attributedIssues,
+        attributed_suggestions: attributedSuggestions,
+        semantic_hints: semanticHints,
+        dimension_scores: beforeScores,
+        sampling_used: false,
+      },
     };
   }
 
@@ -93,6 +105,12 @@ export function optimize(input: OptimizeInput): OptimizeResult {
         break;
     }
   }
+  // Extract clarification questions — surface separately, don't embed in scaffold
+  const clarifications = decomposed.constraints
+    .filter((c) => c.startsWith('Clarify:'))
+    .map((c) => c.replace(/^Clarify:\s*/, ''));
+  decomposed.constraints = decomposed.constraints.filter((c) => !c.startsWith('Clarify:'));
+
   const optimizedPrompt = assembleOptimizedPrompt(
     decomposed,
     techniques,
@@ -104,15 +122,23 @@ export function optimize(input: OptimizeInput): OptimizeResult {
 
   // 7. Score the optimized prompt
   const afterScores = scorePrompt(optimizedPrompt);
+
+  // Score inflation guard: placeholder examples shouldn't inflate the examples dimension
+  const hasPlaceholderExamplesOnly =
+    techniques.some((t) => t.id === 'few-shot') && decomposed.existingExamples.length === 0;
+  if (hasPlaceholderExamplesOnly) {
+    afterScores.examples = Math.min(beforeScores.examples + 2, afterScores.examples);
+  }
+
   const scoreAfter = overallScore(afterScores);
 
   // 8. Build summary from technique action phrases
   const appliedIds = techniques.map((t) => t.id);
   const summary = buildSummary(techniques, issues.length);
 
-  // Regression guard: tolerance of 0.3 because structural rewrites add value
-  // that the scorer may not fully capture (XML tags, role assignment, etc.)
-  if (scoreAfter < scoreBefore - 0.3) {
+  // Regression guard: optimized prompt must strictly improve the score.
+  // If it doesn't, return the original — the user should never see a worse prompt.
+  if (scoreAfter <= scoreBefore) {
     return {
       optimized_prompt: prompt,
       score_before: scoreBefore,
@@ -123,6 +149,14 @@ export function optimize(input: OptimizeInput): OptimizeResult {
       applied_techniques: [],
       issues,
       suggestions,
+      clarifications_needed: clarifications.length > 0 ? clarifications : undefined,
+      analysis: {
+        attributed_issues: attributedIssues,
+        attributed_suggestions: attributedSuggestions,
+        semantic_hints: semanticHints,
+        dimension_scores: beforeScores,
+        sampling_used: false,
+      },
     };
   }
 
@@ -135,6 +169,14 @@ export function optimize(input: OptimizeInput): OptimizeResult {
     applied_techniques: appliedIds,
     issues,
     suggestions,
+    clarifications_needed: clarifications.length > 0 ? clarifications : undefined,
+    analysis: {
+      attributed_issues: attributedIssues,
+      attributed_suggestions: attributedSuggestions,
+      semantic_hints: semanticHints,
+      dimension_scores: afterScores,
+      sampling_used: false,
+    },
   };
 }
 
@@ -364,10 +406,12 @@ function assembleOptimizedPrompt(
   const requirements = buildRequirements(d, intent, scores);
   if (requirements.length > 0) {
     parts.push('');
+    // Use industry-standard XML section name when content matches
+    const reqSectionName = useXml ? inferXmlSectionName(d.task, 'requirements') : null;
     if (useXml) {
-      parts.push('<requirements>');
+      parts.push(`<${reqSectionName}>`);
       requirements.forEach((r) => parts.push(`- ${r}`));
-      parts.push('</requirements>');
+      parts.push(`</${reqSectionName}>`);
     } else {
       parts.push('Requirements:');
       requirements.forEach((r) => parts.push(`- ${r}`));
@@ -484,6 +528,14 @@ function assembleOptimizedPrompt(
   return applyTargetAdjustments(parts.join('\n'), target, intent);
 }
 
+/** Infer industry-standard XML section name based on content. */
+function inferXmlSectionName(content: string, fallback: string): string {
+  for (const [name, pattern] of Object.entries(XML_SECTION_HINTS)) {
+    if (pattern.test(content)) return name;
+  }
+  return fallback;
+}
+
 /** Post-process assembled prompt for target environment. */
 function applyTargetAdjustments(prompt: string, target: Target, intent: Intent): string {
   switch (target) {
@@ -495,9 +547,10 @@ function applyTargetAdjustments(prompt: string, target: Target, intent: Intent):
       );
       // Add codebase-awareness for code intent
       if (intent === 'code' && !prompt.includes('existing conventions')) {
+        // Match any requirements-like closing tag (requirements, guidelines, etc.)
         prompt = prompt.replace(
-          /<\/requirements>/,
-          '- Follow existing conventions in the codebase\n</requirements>',
+          /<\/(requirements|guidelines|making_code_changes)>/,
+          '- Follow existing conventions in the codebase\n</$1>',
         );
       }
       break;
@@ -578,10 +631,23 @@ function buildRequirements(d: DecomposedPrompt, intent: Intent, scores: Scores):
         reqs.push('Consider the intended audience and adjust register accordingly');
         reqs.push('Use a clear form or structure appropriate to the genre');
         break;
-      case 'system':
+      case 'system': {
         reqs.push('Define what the assistant should and should not do');
         reqs.push('Define the scope of knowledge and authority');
+        // Industry-backed: security boundaries (85% of tools)
+        if (
+          !/\b(secret|credential|api\s*key|token|password|sensitive|confidential)\b/i.test(d.task)
+        ) {
+          reqs.push(
+            'Define security boundaries — what data must never be exposed, stored, or transmitted',
+          );
+        }
+        // Industry-backed: anti-affirmation
+        if (!/\b(do\s+not\s+start\s+with|no\s+filler|never\s+say)\b/i.test(d.task)) {
+          reqs.push('Respond directly without filler affirmations');
+        }
         break;
+      }
     }
   }
 
@@ -605,63 +671,20 @@ function buildRequirements(d: DecomposedPrompt, intent: Intent, scores: Scores):
 
 // --- Example generation ---
 
-function buildExamples(d: DecomposedPrompt, intent: Intent): string {
+function buildExamples(d: DecomposedPrompt, _intent: Intent): string {
   // If user already has examples, preserve them
   if (d.existingExamples.length > 0) {
     return d.existingExamples.join('\n');
   }
 
-  // Extract key nouns from the task for more specific placeholders
-  const taskNouns = extractTaskNouns(d.task);
-  const inputHint = taskNouns.length > 0 ? `Sample ${taskNouns[0]} to process` : 'Sample input';
-  const outputHint =
-    taskNouns.length > 0 ? `Expected result for the ${taskNouns[0]}` : 'Expected output';
-
-  switch (intent) {
-    case 'code':
-      return [
-        '<example>',
-        `<input>${inputHint}</input>`,
-        `<output>${outputHint}</output>`,
-        '</example>',
-      ].join('\n');
-    case 'extraction':
-      return [
-        '<example>',
-        `<input>${inputHint}</input>`,
-        `<output>${outputHint} in structured format</output>`,
-        '</example>',
-      ].join('\n');
-    case 'analysis':
-      return [
-        '<example>',
-        `<input>${inputHint}</input>`,
-        '<output>Findings, evidence, recommendations</output>',
-        '</example>',
-      ].join('\n');
-    default:
-      return [
-        '<example>',
-        `<input>${inputHint}</input>`,
-        `<output>${outputHint}</output>`,
-        '</example>',
-      ].join('\n');
-  }
-}
-
-/** Extract key nouns from a task description for example scaffolding. */
-function extractTaskNouns(task: string): string[] {
-  // Match "sort users", "parse CSV", "validate emails" → ["users", "CSV", "emails"]
-  const objectMatch = task.match(
-    /\b(?:sort|parse|validate|extract|filter|transform|convert|create|build|generate|analyze|review|process|handle)\s+((?:the|a|an|all|each)\s+)?(\w+)/i,
-  );
-  if (objectMatch?.[2]) return [objectMatch[2]];
-
-  // Match noun after preposition: "function for users", "endpoint for orders"
-  const prepMatch = task.match(/\b(?:for|of|from|with)\s+((?:the|a|an)\s+)?(\w+)/i);
-  if (prepMatch?.[2]) return [prepMatch[2]];
-
-  return [];
+  // No user examples — provide a scaffold placeholder, not fake content
+  return [
+    '<example>',
+    '<!-- Replace with a real input/output pair for your use case -->',
+    '<input>Your example input here</input>',
+    '<output>Your expected output here</output>',
+    '</example>',
+  ].join('\n');
 }
 
 // --- Output format inference ---
@@ -804,7 +827,7 @@ function inferRole(intent: Intent, task: string, technologies: string[]): string
     return `a senior ${techStr} engineer`;
   }
 
-  // Fall back to intent-based roles with more specificity
+  // Fall back to intent-based roles (compound template for system intent)
   switch (intent) {
     case 'code':
       return 'a senior software engineer who writes clean, well-tested, production-ready code';
@@ -815,7 +838,8 @@ function inferRole(intent: Intent, task: string, technologies: string[]): string
     case 'creative':
       return 'an experienced writer with a strong command of voice, structure, and audience awareness';
     case 'system':
-      return 'a prompt engineer who designs clear, effective, well-bounded system prompts';
+      // Compound role template (used by 60% of production tools)
+      return 'an expert prompt engineer with deep knowledge of system prompt design, constraint specification, and safety boundaries';
     case 'conversation':
       return 'a knowledgeable and direct conversational partner';
     default:
