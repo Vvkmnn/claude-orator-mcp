@@ -10,7 +10,7 @@
 import type { Complexity, Intent } from '../types.js';
 
 // Ordered by priority: most distinctive patterns first
-const INTENT_PATTERNS: [Intent, RegExp[]][] = [
+export const INTENT_PATTERNS: [Intent, RegExp[]][] = [
   [
     'system',
     [
@@ -31,17 +31,25 @@ const INTENT_PATTERNS: [Intent, RegExp[]][] = [
       /\brefactor\b/i,
       /\bdebug\b/i,
       /\bfix\s+(the\s+)?(bug|error|issue|crash)\b/i,
-      /\bcreate\s+(a\s+)?(\w+\s+)*(class|component|api|endpoint|module|service|app|application|middleware|hook|plugin|decorator|wrapper)\b/i,
-      /\badd\s+(a\s+)?(method|function|handler|route|feature)\b/i,
+      /\bcreate\s+(a\s+)?(\w+\s+)*(class|component|api|endpoint|module|service|app|application|middleware|hook|plugin|decorator|wrapper|tool|utility|cli|command|program)\b/i,
+      /\b(convert|transform|parse|migrate)\s+/i,
+      /\badd\s+(a\s+)?(method|function|handler|route|feature|caching|logging|validation|auth(entication)?|middleware|tests?|monitoring|pagination|search|sorting|filtering|indexing|endpoint|field|column|index|hook|event|listener|integration)\b/i,
       /\bcode\s+(that|which|to)\b/i,
       /\banalyze\s+(this\s+)?(code|function|class|module)\b/i,
       /\breview\s+(this\s+)?(code|function|PR|pull\s+request|diff)\b/i,
-      /\bbuild\s+(me\s+)?(a\s+)?(\w+\s+)*(app|application|tool|script|server|client|cli|bot|crawler|fetcher|scraper|parser|service|api|site|website|page|dashboard|plugin|extension|library|package|module)\b/i,
-      /\bmake\s+(me\s+)?(a\s+)?(\w+\s+)*(app|application|tool|script|server|client|cli|bot)\b/i,
-      /\bwrite\s+(me\s+)?(a\s+)?(\w+\s+)*(script|program|app|tool|cli|bot)\b/i,
+      /\bbuild\s+(me\s+)?(a\s+)?(\w+\s+)*(app|application|tool|script|server|client|cli|bot|crawler|fetcher|scraper|parser|service|api|site|website|page|dashboard|plugin|extension|library|package|module|form|file|config|system|pipeline|workflow|container|schema|template|component|view|screen|widget|layout|query|migration|chart|graph|table|image)\b/i,
+      /\bmake\s+(me\s+)?(a\s+)?(\w+\s+)*(app|application|tool|script|server|client|cli|bot|form|component|page|dashboard|system|workflow|pipeline)\b/i,
+      /\bwrite\s+(me\s+)?(a\s+)?(\w+\s+)*(script|program|app|tool|cli|bot|tests?|specs?|benchmarks?|function|class|method|module|handler|middleware|query|migration|hook|component|service)\b/i,
       /\bwhat'?s?\s+wrong\s+with\b/i,
       /\bhow\s+do\s+I\s+(fix|solve|implement|build|make|write|create)\b/i,
       /\bhere'?s?\s+(my|the|some)\s+code\b/i,
+      // Infrastructure/DevOps verbs — need targets to avoid false positives
+      /\b(set\s+up|setup|configure)\s+(a\s+|the\s+|an\s+)?(\w+\s+){0,3}(docker|nginx|eslint|webpack|jest|prettier|ci\/?cd|pipeline|server|database|cluster|environment|container|k8s|kubernetes|monitoring|logging|terraform|ansible|redis|postgres|mysql|mongodb|api|service|auth(entication)?|ssl|tls|proxy|cache|caching|linter|formatter|bundler|compiler|runtime|framework|sdk|toolchain)\b/i,
+      /\b(deploy|migrate)\s+(the\s+|a\s+|an\s+|from\s+|to\s+)/i,
+      /\boptimize\s+(the\s+)?(\w+\s+)*(code|database|queries?|performance|build|bundle|app|application|algorithm|function|rendering|loading|memory|cpu|latency|throughput)\b/i,
+      /\bupdate\s+(the\s+)?(\w+\s+)*(code|schema|config(uration)?|dependency|dependencies|package|migration|module|component|library|framework|version|model|auth(entication)?)\b/i,
+      /\bdesign\s+(a\s+|the\s+)?(\w+\s+)*(database|schema|api|system|architecture|microservice|interface|component|module|class|data\s*model|erd|pipeline|protocol)\b/i,
+      /\binstall\s+(the\s+|a\s+|an\s+)?(\w+\s+)*(package|library|dependency|framework|tool|cli|sdk|runtime|module|plugin|extension)\b/i,
     ],
   ],
   [
@@ -74,11 +82,11 @@ const INTENT_PATTERNS: [Intent, RegExp[]][] = [
   [
     'creative',
     [
-      /\bwrite\s+(a\s+)?(story|poem|essay|blog|article|post|letter|email)\b/i,
+      /\bwrite\s+(me\s+)?(a\s+)?(story|poem|essay|blog|article|post|letter|email|haiku|sonnet|limerick|ballad|verse|screenplay|monologue|dialogue|lyric|song|novel|fiction|narrative)\b/i,
       /\bbrainstorm\b/i,
       /\bdraft\b/i,
       /\bgenerate\s+(a\s+)?(name|title|tagline|slogan|headline)\b/i,
-      /\bcreate\s+(a\s+)?(story|narrative|description)\b/i,
+      /\bcreate\s+(a\s+)?(story|narrative|description|poem|haiku|song|screenplay)\b/i,
     ],
   ],
   [
@@ -121,6 +129,10 @@ const CODE_FALLBACK_SIGNALS = [
   /\bhere'?s?\s+(my|the|some)\s+code\b/i,
   /\b(TypeError|SyntaxError|ReferenceError|Error|Exception|stack\s*trace|segfault)\b/,
   /\b(npm|pip|cargo|yarn|pnpm|go\s+get|brew|apt|gem)\s+(install|add|run|build|test)\b/i,
+  // Targeted infrastructure signals (tool + action, not bare keywords)
+  /\b(docker|terraform|kubernetes|k8s|ansible)\s+(compose|build|run|file|config|deploy|apply|plan|init|image|volume|network)\b/i,
+  /\bwrite\s+(a\s+)?(\w+\s+)*(in|using|with)\s+(typescript|javascript|python|rust|go|java|ruby|php|swift|kotlin|c\+\+)\b/i,
+  /\b(cron\s*job|git\s*hook|pre-?commit|webhook|dockerfile|makefile|yaml\s*file|env\s*file)\b/i,
 ];
 
 /** Detect intent from prompt content with disambiguation and fallback heuristics. */
@@ -150,6 +162,17 @@ export function detectIntent(prompt: string): Intent {
   }
 
   return 'conversation';
+}
+
+/** Count how many distinct intent categories match the prompt. */
+export function countIntentMatches(prompt: string): number {
+  let count = 0;
+  for (const [, patterns] of INTENT_PATTERNS) {
+    if (patterns.some((p) => p.test(prompt))) {
+      count++;
+    }
+  }
+  return count;
 }
 
 /** Detect complexity based on word count and structural indicators. */

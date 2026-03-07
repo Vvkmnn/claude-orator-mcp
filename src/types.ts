@@ -66,4 +66,50 @@ export interface OptimizeResult {
   applied_techniques: string[];
   issues: string[];
   suggestions: string[];
+  clarifications_needed?: string[];
+  analysis?: AnalysisMetadata;
+}
+
+// --- Semantic intelligence types ---
+
+export type IssueSource = 'dimension' | 'anti_pattern' | 'industry' | 'contextual';
+export type Confidence = 'high' | 'medium';
+
+export interface AttributedIssue {
+  message: string;
+  dimension?: ScoreDimension;
+  source: IssueSource;
+  confidence: Confidence;
+  pattern_id?: string;
+}
+
+export interface AttributedSuggestion {
+  message: string;
+  dimension?: ScoreDimension;
+  source: IssueSource;
+  confidence: Confidence;
+  pattern_id?: string;
+}
+
+export interface SemanticHint {
+  area: string;
+  reason: string;
+  check: string;
+  dimension?: ScoreDimension;
+}
+
+export interface AnalysisMetadata {
+  attributed_issues: AttributedIssue[];
+  attributed_suggestions: AttributedSuggestion[];
+  semantic_hints: SemanticHint[];
+  dimension_scores: Scores;
+  sampling_used: boolean;
+  sampling_validation?: SamplingValidation;
+}
+
+export interface SamplingValidation {
+  agreed: boolean;
+  summary: string;
+  additional_issues: string[];
+  disputed_issues: string[];
 }

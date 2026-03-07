@@ -4,7 +4,23 @@
  * Each dimension is 0-10, overall is weighted sum.
  */
 
-import { DIMENSION_WEIGHTS, type Scores } from '../types.js';
+import {
+  DIMENSION_WEIGHTS,
+  type AttributedIssue,
+  type AttributedSuggestion,
+  type Complexity,
+  type Intent,
+  type ScoreDimension,
+  type Scores,
+  type SemanticHint,
+} from '../types.js';
+import {
+  EMPHASIS_TIERS,
+  ESCAPE_HATCH_PHRASES,
+  INDUSTRY_PATTERNS,
+  type IndustryPattern,
+} from './industry.js';
+import { countIntentMatches } from './detector.js';
 
 // --- Pattern sets for scoring ---
 
@@ -32,7 +48,7 @@ const NEGATIVE_CONSTRAINTS =
   /\b(do\s+not|don't|never|avoid|must\s+not|should\s+not|shouldn't|cannot|can't|exclude|prohibit)\b/gi;
 
 const BOUNDARY_CONDITIONS =
-  /\b(at\s+most|no\s+more\s+than|at\s+least|maximum|minimum|between\s+\d+\s+and\s+\d+|up\s+to|limit|fewer\s+than|greater\s+than)\b/gi;
+  /\b(at\s+most|no\s+more\s+than|at\s+least|maximum|minimum|between\s+\d+\s+and\s+\d+|up\s+to|limit|fewer\s+than|greater\s+than|under\s+\d+|below\s+\d+|within\s+\d+|less\s+than|more\s+than|over\s+\d+|exceed)\b/gi;
 
 const SCOPE_MARKERS =
   /\b(only|focus\s+on|limited\s+to|specifically|exclusively|restricted\s+to|scope|just\s+the)\b/gi;
@@ -52,11 +68,11 @@ const CONCRETE_CONSTRAINTS =
  * causing intermittent false negatives. Use NAMED_TECH_TEST for .test() calls.
  */
 const NAMED_TECH =
-  /\b(typescript|javascript|python|rust|go|react|vue|angular|svelte|next\.?js|node\.?js|express|fastapi|django|flask|spring|rails|postgres|mysql|redis|mongodb|sqlite|docker|kubernetes|aws|gcp|azure|graphql|rest|grpc|websocket|pandas|matplotlib|numpy|scipy|reqwest|tokio|serde|actix|axum|axios|jest|vitest|lodash|tailwind|prisma|drizzle|zod|pydantic|celery|sqlalchemy)\b/gi;
+  /\b(typescript|javascript|python|rust|go|react|vue|angular|svelte|next\.?js|node\.?js|express|fastapi|django|flask|spring|rails|postgres|mysql|redis|mongodb|sqlite|docker|kubernetes|aws|gcp|azure|graphql|rest|grpc|websocket|pandas|matplotlib|numpy|scipy|reqwest|tokio|serde|actix|axum|axios|jest|vitest|lodash|tailwind|prisma|drizzle|zod|pydantic|celery|sqlalchemy|oauth2?|saml|jwt|oidc|ldap|openid|kerberos|json|csv|yaml|toml|markdown)\b/gi;
 
 /** Safe for .test() — no /g flag, so lastIndex stays at 0 between calls. */
 const NAMED_TECH_TEST =
-  /\b(typescript|javascript|python|rust|go|react|vue|angular|svelte|next\.?js|node\.?js|express|fastapi|django|flask|spring|rails|postgres|mysql|redis|mongodb|sqlite|docker|kubernetes|aws|gcp|azure|graphql|rest|grpc|websocket|pandas|matplotlib|numpy|scipy|reqwest|tokio|serde|actix|axum|axios|jest|vitest|lodash|tailwind|prisma|drizzle|zod|pydantic|celery|sqlalchemy)\b/i;
+  /\b(typescript|javascript|python|rust|go|react|vue|angular|svelte|next\.?js|node\.?js|express|fastapi|django|flask|spring|rails|postgres|mysql|redis|mongodb|sqlite|docker|kubernetes|aws|gcp|azure|graphql|rest|grpc|websocket|pandas|matplotlib|numpy|scipy|reqwest|tokio|serde|actix|axum|axios|jest|vitest|lodash|tailwind|prisma|drizzle|zod|pydantic|celery|sqlalchemy|oauth2?|saml|jwt|oidc|ldap|openid|kerberos|json|csv|yaml|toml|markdown)\b/i;
 
 const STOP_WORDS = new Set([
   'the',
@@ -309,6 +325,11 @@ function scoreOutputFormat(prompt: string): number {
   if (LENGTH_CONSTRAINTS.test(prompt)) score += 2;
   if (TONE_KEYWORDS.test(prompt)) score += 1;
 
+  // Embedded schemas: JSON schema, TypeScript interface, Zod schema (highest specificity)
+  if (/\{[^}]*"type"\s*:\s*"(string|number|object|array)"/i.test(prompt)) score += 3;
+  if (/\binterface\s+\w+\s*\{/i.test(prompt)) score += 3;
+  if (/\bz\.(string|number|object|array)\b/i.test(prompt)) score += 3;
+
   return Math.min(10, score);
 }
 
@@ -434,6 +455,38 @@ const CLAUDE_ANTI_PATTERNS: AntiPattern[] = [
     issue: '"Suggest" framing causes Claude to recommend instead of implementing',
     suggestion: 'Be direct: "Change this function to..." not "Can you suggest changes to..."',
   },
+
+  // Meta-prompt instructions (tell model HOW to think instead of WHAT to do)
+  {
+    pattern:
+      /\b(think\s+about\s+what\s+(?:I|you|we|the\s+user)\s+(?:actually\s+)?need|give\s+(?:me\s+)?the\s+best\s+(?:possible\s+)?(?:answer|response|output)|as\s+(?:thorough|detailed|complete|comprehensive)\s+as\s+possible|before\s+you\s+(?:respond|answer|reply),?\s*think\s+about\s+what)\b/i,
+    issue:
+      'Meta-prompt instructions ("think about what I need", "best possible answer") add no information — Claude already reasons before responding',
+    suggestion:
+      'Replace meta-instructions with concrete targets: "Prioritize practical implementation" or "Cover edge cases X, Y, Z" instead of "think about what I need"',
+  },
+
+  // --- Industry-derived anti-patterns (from 34-tool analysis) ---
+
+  // Baseline expectations (zero-info instructions)
+  {
+    pattern: /\b(be helpful|be accurate|be correct|high-quality responses)\b/i,
+    issue:
+      '"Be helpful/accurate" adds no information — these are baseline expectations, not instructions',
+    suggestion:
+      'Remove baseline expectations — specify what "helpful" means: response format, depth, audience',
+  },
+
+  // Escape-hatch phrases (scope weakeners)
+  {
+    pattern: new RegExp(
+      `\\b(${ESCAPE_HATCH_PHRASES.map((p) => p.replace(/\s+/g, '\\s+')).join('|')})\\b`,
+      'i',
+    ),
+    issue: '"When appropriate" creates opt-out paths — the model will use them to skip work',
+    suggestion:
+      'Make conditions explicit: "When the input contains dates, format as ISO 8601" instead of "format dates when appropriate"',
+  },
 ];
 
 // --- Main scoring function ---
@@ -469,108 +522,487 @@ export function overallScore(scores: Scores): number {
 // --- Issue & suggestion detection ---
 
 /** Detect issues in the prompt as flat string descriptions. */
-export function detectIssues(prompt: string, scores: Scores): string[] {
-  const issues: string[] = [];
+export function detectIssues(prompt: string, scores: Scores, intent?: Intent): string[] {
+  return detectAttributedIssues(prompt, scores, intent).map((i) => i.message);
+}
 
+/** Generate actionable suggestions as flat strings. */
+export function generateSuggestions(prompt: string, scores: Scores, intent?: Intent): string[] {
+  return generateAttributedSuggestions(prompt, scores, intent).map((s) => s.message);
+}
+
+// --- Emphasis balance analysis ---
+
+interface EmphasisAnalysis {
+  monoEmphasis: boolean;
+  negativeHeavy: boolean;
+}
+
+/** Analyze emphasis keyword distribution and negative/positive ratio. */
+function analyzeEmphasisBalance(prompt: string): EmphasisAnalysis {
+  // Count absolute emphasis keywords
+  const absoluteCounts: Record<string, number> = {};
+  let totalAbsolute = 0;
+  for (const keyword of EMPHASIS_TIERS.absolute) {
+    const regex = new RegExp(`\\b${keyword}\\b`, 'g');
+    const count = (prompt.match(regex) ?? []).length;
+    if (count > 0) {
+      absoluteCounts[keyword] = count;
+      totalAbsolute += count;
+    }
+  }
+
+  // Check for tiering: any moderate/informational keywords present?
+  const hasOtherTiers =
+    EMPHASIS_TIERS.moderate.some((k) => new RegExp(`\\b${k}\\b`).test(prompt)) ||
+    EMPHASIS_TIERS.informational.some((k) => new RegExp(`\\b${k}\\b`).test(prompt));
+
+  // Mono-emphasis: >5 of a single absolute keyword with no tiering
+  const monoEmphasis =
+    !hasOtherTiers && Object.values(absoluteCounts).some((count) => count > 5) && totalAbsolute > 5;
+
+  // Negative vs positive ratio
+  const negatives = (prompt.match(/\b(do\s+not|don't|never|avoid)\b/gi) ?? []).length;
+  const positives = (
+    prompt.match(/\b(do|always|ensure|make\s+sure|include|provide|use|follow|implement)\b/gi) ?? []
+  ).length;
+  const negativeHeavy = negatives > 3 && (positives === 0 || negatives / positives > 2);
+
+  return { monoEmphasis, negativeHeavy };
+}
+
+// --- Attribution helpers ---
+
+/** Map IndustryPattern category to the most relevant ScoreDimension. */
+function categoryToDimension(category: IndustryPattern['category']): ScoreDimension | undefined {
+  const map: Record<string, ScoreDimension> = {
+    structure: 'structure',
+    role: 'clarity',
+    constraint: 'constraints',
+    examples: 'examples',
+    security: 'constraints',
+    scope: 'constraints',
+    agentic: 'constraints',
+  };
+  return map[category];
+}
+
+/** Map anti-pattern issue text to the most affected ScoreDimension. */
+function antiPatternDimension(issue: string): ScoreDimension {
+  if (/creative|detailed|thorough|think carefully|comprehensive/i.test(issue)) return 'specificity';
+  if (/do your best|pretend|apologize/i.test(issue)) return 'clarity';
+  if (/AI|assistant|helpful|accurate/i.test(issue)) return 'clarity';
+  if (/tool|MUST use/i.test(issue)) return 'constraints';
+  if (/plan|explain your/i.test(issue)) return 'token_efficiency';
+  if (/suggest|recommend/i.test(issue)) return 'clarity';
+  if (/appropriate|when needed/i.test(issue)) return 'specificity';
+  return 'clarity';
+}
+
+// --- Attributed issue detection (source of truth) ---
+
+/** Detect issues with full attribution metadata. */
+export function detectAttributedIssues(
+  prompt: string,
+  scores: Scores,
+  intent?: Intent,
+): AttributedIssue[] {
+  const issues: AttributedIssue[] = [];
+
+  // Dimension-triggered issues
   if (scores.clarity < 5) {
     if (HEDGING_WORDS.test(prompt))
-      issues.push('Contains hedging language that weakens the instruction');
-    if (!STRONG_VERBS.test(prompt)) issues.push('Does not start with a clear action verb');
+      issues.push({
+        message: 'Contains hedging language that weakens the instruction',
+        dimension: 'clarity',
+        source: 'dimension',
+        confidence: 'high',
+      });
+    if (!STRONG_VERBS.test(prompt))
+      issues.push({
+        message: 'Does not start with a clear action verb',
+        dimension: 'clarity',
+        source: 'dimension',
+        confidence: 'high',
+      });
     const ambiguous = prompt.match(AMBIGUOUS_WORDS);
     if (ambiguous && ambiguous.length > 2)
-      issues.push(`Uses ${ambiguous.length} ambiguous references (something, stuff, it, this)`);
+      issues.push({
+        message: `Uses ${ambiguous.length} ambiguous references (something, stuff, it, this)`,
+        dimension: 'clarity',
+        source: 'dimension',
+        confidence: 'high',
+      });
   }
 
   if (scores.specificity < 5) {
-    if (!NAMED_TECH_TEST.test(prompt)) issues.push('No specific technologies or formats named');
-    if (!/\d/.test(prompt)) issues.push('No quantified requirements or constraints');
+    if (!NAMED_TECH_TEST.test(prompt) && intent !== 'creative')
+      issues.push({
+        message: 'No specific technologies or formats named',
+        dimension: 'specificity',
+        source: 'dimension',
+        confidence: 'high',
+      });
+    if (!/\d/.test(prompt))
+      issues.push({
+        message: 'No quantified requirements or constraints',
+        dimension: 'specificity',
+        source: 'dimension',
+        confidence: 'high',
+      });
   }
 
   if (scores.structure < 4) {
     if (prompt.length > 200)
-      issues.push('Long prompt lacks structural formatting (XML tags, headers, lists)');
+      issues.push({
+        message: 'Long prompt lacks structural formatting (XML tags, headers, lists)',
+        dimension: 'structure',
+        source: 'dimension',
+        confidence: 'high',
+      });
   }
 
   if (scores.examples < 3) {
-    issues.push('No examples provided to demonstrate expected input/output');
+    issues.push({
+      message: 'No examples provided to demonstrate expected input/output',
+      dimension: 'examples',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
   if (scores.output_format < 4) {
-    issues.push('No output format specified');
+    issues.push({
+      message: 'No output format specified',
+      dimension: 'output_format',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
   if (scores.constraints < 4) {
-    issues.push('Missing explicit constraints or scope boundaries');
+    issues.push({
+      message: 'Missing explicit constraints or scope boundaries',
+      dimension: 'constraints',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
   if (scores.token_efficiency < 5) {
     const fillers = prompt.match(FILLER_PHRASES);
     if (fillers && fillers.length > 0)
-      issues.push(
-        `${fillers.length} filler phrases waste tokens (please, I would like you to, etc.)`,
-      );
+      issues.push({
+        message: `${fillers.length} filler phrases waste tokens (please, I would like you to, etc.)`,
+        dimension: 'token_efficiency',
+        source: 'dimension',
+        confidence: 'high',
+      });
   }
 
   // Claude-specific anti-patterns
   for (const ap of CLAUDE_ANTI_PATTERNS) {
     if (ap.pattern.test(prompt)) {
-      issues.push(ap.issue);
+      issues.push({
+        message: ap.issue,
+        dimension: antiPatternDimension(ap.issue),
+        source: 'anti_pattern',
+        confidence: 'high',
+      });
     }
+  }
+
+  // Industry patterns
+  for (const pattern of INDUSTRY_PATTERNS) {
+    if (pattern.appliesTo && intent && !pattern.appliesTo.includes(intent)) continue;
+    if (pattern.minLength && prompt.length < pattern.minLength) continue;
+    if (pattern.prevalence < 0.7) continue;
+    if (!pattern.detect.test(prompt)) {
+      issues.push({
+        message: pattern.issue,
+        dimension: categoryToDimension(pattern.category),
+        source: 'industry',
+        confidence: pattern.prevalence >= 0.85 ? 'high' : 'medium',
+        pattern_id: pattern.id,
+      });
+    }
+  }
+
+  // Contextual: comprehensive without scope
+  if (/\b(comprehensive|exhaustive|complete)\b/i.test(prompt)) {
+    const match = prompt.match(/\b(comprehensive|exhaustive|complete)\b/i);
+    if (match?.index !== undefined) {
+      const nearby = prompt.slice(match.index, match.index + 100);
+      if (!SCOPE_MARKERS.test(nearby)) {
+        issues.push({
+          message: "'Comprehensive' without scope leads to unbounded output",
+          dimension: 'constraints',
+          source: 'contextual',
+          confidence: 'medium',
+        });
+      }
+    }
+  }
+
+  // Contextual: emphasis balance
+  const emphasisCounts = analyzeEmphasisBalance(prompt);
+  if (emphasisCounts.monoEmphasis) {
+    issues.push({
+      message: 'Using only MUST (or only NEVER) for all constraints dilutes their force',
+      dimension: 'constraints',
+      source: 'contextual',
+      confidence: 'medium',
+    });
+  }
+  if (emphasisCounts.negativeHeavy) {
+    issues.push({
+      message:
+        "Lists of 'don't do X' without 'do Y instead' leave the model without positive guidance",
+      dimension: 'constraints',
+      source: 'contextual',
+      confidence: 'medium',
+    });
   }
 
   return issues;
 }
 
-/** Generate actionable suggestions as flat strings. */
-export function generateSuggestions(prompt: string, scores: Scores): string[] {
-  const suggestions: string[] = [];
+// --- Attributed suggestion generation (source of truth) ---
+
+/** Generate suggestions with full attribution metadata. */
+export function generateAttributedSuggestions(
+  prompt: string,
+  scores: Scores,
+  intent?: Intent,
+): AttributedSuggestion[] {
+  const suggestions: AttributedSuggestion[] = [];
 
   if (scores.clarity < 5 && !STRONG_VERBS.test(prompt)) {
-    suggestions.push('Start with a strong action verb: "Write...", "Create...", "Analyze..."');
+    suggestions.push({
+      message: 'Start with a strong action verb: "Write...", "Create...", "Analyze..."',
+      dimension: 'clarity',
+      source: 'dimension',
+      confidence: 'high',
+    });
   }
 
   if (scores.structure < 4 && prompt.length > 200) {
-    suggestions.push('Wrap sections in XML tags: <task>, <requirements>, <context>');
+    suggestions.push({
+      message: 'Wrap sections in XML tags: <task>, <requirements>, <context>',
+      dimension: 'structure',
+      source: 'dimension',
+      confidence: 'high',
+    });
   }
 
   if (scores.examples < 3) {
-    suggestions.push('Add an input/output example to demonstrate expected behavior');
+    suggestions.push({
+      message: 'Add an input/output example to demonstrate expected behavior',
+      dimension: 'examples',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
   if (scores.output_format < 4) {
-    suggestions.push('Specify output format: JSON, markdown, code block, table, etc.');
+    suggestions.push({
+      message: 'Specify output format: JSON, markdown, code block, table, etc.',
+      dimension: 'output_format',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
   if (scores.specificity < 5) {
-    suggestions.push(
-      'Add concrete constraints: named technologies, numeric limits, explicit boundaries',
-    );
+    suggestions.push({
+      message: 'Add concrete constraints: named technologies, numeric limits, explicit boundaries',
+      dimension: 'specificity',
+      source: 'dimension',
+      confidence: 'high',
+    });
   }
 
   if (scores.constraints < 4) {
-    suggestions.push('Define scope with "only", "focus on", "do not include"');
+    suggestions.push({
+      message: 'Define scope with "only", "focus on", "do not include"',
+      dimension: 'constraints',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
-  // TDD suggestion for code intent with low examples score (from Codex WebApp1K research)
+  // TDD suggestion — only for code intent, suppress when prompt is already about writing tests
   if (
     scores.examples < 3 &&
-    /\b(implement|write|create|build|code|function|class)\b/i.test(prompt)
+    intent === 'code' &&
+    /\b(implement|write|create|build|code|function|class)\b/i.test(prompt) &&
+    !/\b(write|create|add|generate)\s+(\w+\s+)*(unit\s+)?tests?\b/i.test(prompt)
   ) {
-    suggestions.push(
-      'Consider providing test cases as specification — tests produce more precise code than prose descriptions',
-    );
+    suggestions.push({
+      message:
+        'Consider providing test cases as specification — tests produce more precise code than prose descriptions',
+      dimension: 'examples',
+      source: 'dimension',
+      confidence: 'medium',
+    });
   }
 
   if (scores.token_efficiency < 5) {
-    suggestions.push('Remove filler phrases — go directly to the instruction');
+    suggestions.push({
+      message: 'Remove filler phrases — go directly to the instruction',
+      dimension: 'token_efficiency',
+      source: 'dimension',
+      confidence: 'high',
+    });
   }
 
-  // Claude-specific anti-pattern suggestions
+  // Anti-pattern suggestions
   for (const ap of CLAUDE_ANTI_PATTERNS) {
     if (ap.pattern.test(prompt)) {
-      suggestions.push(ap.suggestion);
+      suggestions.push({
+        message: ap.suggestion,
+        dimension: antiPatternDimension(ap.issue),
+        source: 'anti_pattern',
+        confidence: 'high',
+      });
     }
   }
 
+  // Industry pattern suggestions
+  for (const pattern of INDUSTRY_PATTERNS) {
+    if (pattern.appliesTo && intent && !pattern.appliesTo.includes(intent)) continue;
+    if (pattern.minLength && prompt.length < pattern.minLength) continue;
+    if (pattern.prevalence < 0.7) continue;
+    if (!pattern.detect.test(prompt)) {
+      suggestions.push({
+        message: pattern.suggestion,
+        dimension: categoryToDimension(pattern.category),
+        source: 'industry',
+        confidence: pattern.prevalence >= 0.85 ? 'high' : 'medium',
+        pattern_id: pattern.id,
+      });
+    }
+  }
+
+  // Emphasis balance suggestions
+  const emphasisCounts = analyzeEmphasisBalance(prompt);
+  if (emphasisCounts.monoEmphasis) {
+    suggestions.push({
+      message:
+        'Tier constraints: MUST for hard rules, SHOULD for preferences, MAY for suggestions — 95% of production tools use tiered emphasis',
+      dimension: 'constraints',
+      source: 'contextual',
+      confidence: 'medium',
+    });
+  }
+  if (emphasisCounts.negativeHeavy) {
+    suggestions.push({
+      message:
+        'Pair prohibitions with positive alternatives: "Do not summarize the entire article. Instead, extract the 3 key claims."',
+      dimension: 'constraints',
+      source: 'contextual',
+      confidence: 'medium',
+    });
+  }
+
   return suggestions;
+}
+
+// --- Semantic hint generation ---
+
+/** Generate semantic hints — meta-observations about analysis uncertainty for calling Claude. */
+export function generateSemanticHints(
+  prompt: string,
+  scores: Scores,
+  intent: Intent,
+  complexity: Complexity,
+): SemanticHint[] {
+  const hints: SemanticHint[] = [];
+
+  // Intent ambiguity: multiple intent patterns match
+  const matchCount = countIntentMatches(prompt);
+  if (matchCount >= 2) {
+    hints.push({
+      area: 'intent_detection',
+      reason: `Prompt matches ${matchCount} intent categories — detected as "${intent}" but could be misclassified`,
+      check:
+        "Verify the detected intent fits the user's actual goal before applying intent-specific scaffolding",
+    });
+  }
+
+  // Borderline dimension scores (within ±1 of threshold)
+  const thresholds: Partial<Record<ScoreDimension, number>> = {
+    clarity: 5,
+    specificity: 5,
+    structure: 4,
+    examples: 3,
+    output_format: 4,
+    constraints: 4,
+    token_efficiency: 5,
+  };
+  for (const [dim, threshold] of Object.entries(thresholds)) {
+    const score = scores[dim as ScoreDimension];
+    if (Math.abs(score - threshold) <= 1 && score > 0) {
+      hints.push({
+        area: `borderline_${dim}`,
+        reason: `${dim} score (${score}) is near the issue threshold (${threshold})`,
+        check: `Assess whether ${dim} is adequate for this specific use case`,
+        dimension: dim as ScoreDimension,
+      });
+    }
+  }
+
+  // Quality mismatch: high clarity + low specificity may be intentional vagueness
+  // Only fire when gap is genuinely surprising (specificity <= 1) and not creative intent
+  if (scores.clarity >= 7 && scores.specificity <= 1 && intent !== 'creative') {
+    hints.push({
+      area: 'quality_mismatch',
+      reason: 'High clarity but low specificity — the prompt is clear but deliberately open-ended',
+      check: 'Determine if the vagueness is intentional (creative/exploratory) or an oversight',
+    });
+  }
+
+  // Complexity assessment
+  if (complexity === 'moderate') {
+    hints.push({
+      area: 'complexity_assessment',
+      reason:
+        'Moderate complexity detected — prompt chaining or thinking scaffolds may or may not help',
+      check:
+        'Assess whether the task benefits from step-by-step decomposition or if direct execution is better',
+    });
+  }
+
+  // Domain expertise detection
+  if (/\b(medical|clinical|patient|diagnosis|treatment|pharma|drug|dosage)\b/i.test(prompt)) {
+    hints.push({
+      area: 'domain_expertise',
+      reason: 'Medical/clinical domain keywords detected',
+      check:
+        'Verify domain-specific constraints are appropriate — medical prompts may need disclaimers and evidence requirements',
+      dimension: 'constraints',
+    });
+  }
+  if (/\b(legal|law|regulation|compliance|statute|liability|attorney|contract)\b/i.test(prompt)) {
+    hints.push({
+      area: 'domain_expertise',
+      reason: 'Legal domain keywords detected',
+      check: 'Verify legal disclaimers and jurisdiction-specific constraints are appropriate',
+      dimension: 'constraints',
+    });
+  }
+  if (
+    /\b(financial|investment|trading|portfolio|returns?\s+on|stock|bond|dividend|equity|securities)\b/i.test(
+      prompt,
+    )
+  ) {
+    hints.push({
+      area: 'domain_expertise',
+      reason: 'Financial domain keywords detected',
+      check: 'Verify financial disclaimers and regulatory constraints are appropriate',
+      dimension: 'constraints',
+    });
+  }
+
+  return hints;
 }
