@@ -12,6 +12,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { fmt, fmtMinimal } from './format.js';
 import { optimize } from './optimize.js';
+import { clientSupportsSampling, validateViaSampling } from './sampling.js';
 import { OptimizeInputSchema } from './types.js';
 
 const require = createRequire(import.meta.url);
@@ -38,7 +39,17 @@ Analyzes a raw prompt and returns an optimized version using Anthropic's prompt 
 3. Auto-selects applicable Anthropic techniques (XML tags, few-shot, chain-of-thought, etc.)
 4. Returns an optimized prompt scaffold with score improvement metrics
 
-**Important:** The optimized_prompt is a structural scaffold. Always refine it with your domain knowledge and conversation context before using it.`;
+**Important:** The optimized_prompt is a structural scaffold. Always refine it with your domain knowledge and conversation context before using it.
+
+## Analysis metadata
+
+The \`analysis\` field provides enriched analysis for programmatic consumption:
+
+- **attributed_issues**: Each issue includes \`dimension\`, \`source\` (dimension/anti_pattern/industry/contextual), and \`confidence\` (high/medium). Prioritize high-confidence dimension issues.
+- **attributed_suggestions**: Same structure as issues — use source and confidence to prioritize.
+- **semantic_hints**: Meta-observations about analysis uncertainty. Treat as a review checklist, not issues. Verify with the user when intent is ambiguous.
+- **dimension_scores**: Raw 7-dimension breakdown (clarity, specificity, structure, examples, constraints, output_format, token_efficiency). Each 0-10.
+- **sampling_used**: Whether a second-opinion was obtained via MCP sampling. Check \`sampling_validation\` for details when true.`;
 
 // --- Tool definition ---
 
@@ -96,6 +107,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     const input = OptimizeInputSchema.parse(args);
     const result = optimize(input);
+
+    // Sampling validation: ask host LLM to review analysis if it supports sampling
+    if (result.analysis?.semantic_hints.length && clientSupportsSampling(server)) {
+      const validation = await validateViaSampling(server, result, result.analysis.semantic_hints);
+      if (validation && result.analysis) {
+        result.analysis.sampling_used = true;
+        result.analysis.sampling_validation = validation;
+      }
+    }
 
     // Format notification + JSON payload
     const notification =
