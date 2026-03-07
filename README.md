@@ -278,7 +278,7 @@ How [claude-orator-mcp](https://github.com/Vvkmnn/claude-orator-mcp) [works](htt
 - **Lean output**: flat string arrays for issues/suggestions, no nested objects
 - **Weighted dimensions**: clarity and specificity matter most (20% each)
 - **Technique cap**: max 4 techniques per optimization (diminishing returns beyond)
-- **Anti-pattern detection**: 10 Claude-specific anti-patterns including 4 for Claude 4.6
+- **Anti-pattern detection**: 12 Claude-specific anti-patterns + 20 industry patterns from 34 production AI tools
 - **Zero dependencies**: only `@modelcontextprotocol/sdk` + `zod`
 
 ## alternatives
@@ -354,6 +354,16 @@ Learn from examples:
 - [TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) for best practices
 - [Creating Node.js modules](https://docs.npmjs.com/creating-node-js-modules) for npm package development
 - [Anthropic prompt engineering docs](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview) for technique details
+
+## acknowledgments
+
+Industry pattern data derived from deep analysis of system prompts from 34 AI coding tools
+collected in [system-prompts-and-models-of-ai-tools](https://github.com/x1xhlol/system-prompts-and-models-of-ai-tools),
+including Claude Code, Cursor, Windsurf, v0, Devin, Cline, Lovable, Replit, Amp, Gemini, and
+25 others. Patterns are curated with prevalence data and embedded — no external dependency
+or installation required. Cross-referenced with research from the
+[Prompt Report](https://arxiv.org/abs/2406.06608) (1,500 papers surveyed) and
+[Anthropic's prompt engineering documentation](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview).
 
 ## license
 
