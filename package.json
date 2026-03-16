@@ -1,9 +1,13 @@
 {
   "name": "claude-orator-mcp",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "An MCP server for prompt optimization in Claude Code",
   "type": "module",
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "bin": {
     "claude-orator-mcp": "./dist/index.js"
   },
@@ -72,7 +76,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.27.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
